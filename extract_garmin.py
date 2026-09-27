@@ -87,27 +87,57 @@ def dias_a_sincronizar(repo: DataRepo):
     return fechas
 
 
+def _sleep_dto(client: Garmin, fecha_str: str):
+    """dailySleepDTO de Garmin para "fecha_str", o {} si no hay dato (reloj
+    sin poner esa noche, fecha futura, error de red, etc.) — nunca lanza."""
+    try:
+        data = client.get_sleep_data(fecha_str)
+        return (data or {}).get("dailySleepDTO") or {}
+    except Exception:
+        return {}
+
+
 def extraer_wellness(client: Garmin, fecha: date):
     fecha_str = fecha.isoformat()
     snapshot = {"fecha": fecha_str}
 
-    try:
-        sleep_data = client.get_sleep_data(fecha_str)
-        seg = sleep_data.get("dailySleepDTO", {}).get("sleepTimeSeconds")
-        snapshot["sueno_horas"] = round(seg / 3600, 2) if seg else None
-    except Exception as e:
-        snapshot["sueno_horas"] = None
-        snapshot["_error_sueno"] = str(e)
+    # Garmin guarda la noche D-1 -> D (la que termina la mañana de "fecha")
+    # en el registro de sueño de "fecha", y la noche D -> D+1 (la que
+    # empieza esa misma noche) en el registro de "fecha + 1 día". De ahí
+    # sacamos "despertar" (hora en que se levantó esa mañana) y "acostarse"
+    # (hora en que se fue a dormir esa noche), en epoch-ms UTC — la misma
+    # unidad que usa bodyBatteryValuesArray, así que se pueden comparar
+    # directamente sin líos de zona horaria.
+    hoy_dto = _sleep_dto(client, fecha_str)
+    manana_dto = _sleep_dto(client, (fecha + timedelta(days=1)).isoformat())
+    despertar_ms = hoy_dto.get("sleepEndTimestampGMT")
+    acostarse_ms = manana_dto.get("sleepStartTimestampGMT")
+
+    seg = hoy_dto.get("sleepTimeSeconds")
+    snapshot["sueno_horas"] = round(seg / 3600, 2) if seg else None
 
     try:
         body_battery = client.get_body_battery(fecha_str, fecha_str)
         if body_battery:
             # bodyBatteryValuesArray es una lista de [timestamp_ms, valor] a lo
-            # largo del día. Antes solo nos quedábamos con min/max/último; ahora
-            # guardamos también el primero (inicio del día) y la serie completa
-            # (hora local "HH:MM" + valor) para poder dibujar cómo ha variado a
-            # lo largo del día en vez de un solo punto por día.
-            puntos = [p for p in body_battery[0].get("bodyBatteryValuesArray", []) if p[1] is not None]
+            # largo del día natural (00:01-23:59). Si te acuestas después de
+            # medianoche, ese día natural no es "tu día" — arranca a mitad de
+            # la noche anterior, todavía dormido. Por eso se acota la ventana
+            # a "desde que te despertaste esa mañana hasta que te acostaste
+            # esa noche" usando los datos de sueño de arriba; si falta alguno
+            # de los dos extremos (p.ej. hoy mismo, que aún no te has
+            # acostado) no se recorta por ese lado. Si no hay NINGÚN dato de
+            # sueño ese día (reloj sin poner), se cae al día natural completo
+            # de toda la vida, para no dejar la tarjeta vacía.
+            puntos_todos = [p for p in body_battery[0].get("bodyBatteryValuesArray", []) if p[1] is not None]
+            puntos = [
+                p for p in puntos_todos
+                if (despertar_ms is None or p[0] >= despertar_ms)
+                and (acostarse_ms is None or p[0] <= acostarse_ms)
+            ]
+            if not puntos:
+                puntos = puntos_todos  # la ventana no solapó con datos reales -> fallback
+
             valores = [p[1] for p in puntos]
             snapshot["bateria_corporal"] = valores[-1] if valores else None
             snapshot["bateria_corporal_inicio"] = valores[0] if valores else None
@@ -116,6 +146,10 @@ def extraer_wellness(client: Garmin, fecha: date):
             snapshot["bateria_corporal_serie"] = [
                 [datetime.utcfromtimestamp(p[0] / 1000).strftime("%H:%M"), p[1]] for p in puntos
             ]
+            snapshot["bateria_corporal_ventana"] = {
+                "despertar": datetime.utcfromtimestamp(despertar_ms / 1000).strftime("%H:%M") if despertar_ms else None,
+                "acostarse": datetime.utcfromtimestamp(acostarse_ms / 1000).strftime("%H:%M") if acostarse_ms else None,
+            }
     except Exception as e:
         snapshot["bateria_corporal"] = None
         snapshot["_error_bateria"] = str(e)
