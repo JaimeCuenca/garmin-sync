@@ -102,10 +102,20 @@ def extraer_wellness(client: Garmin, fecha: date):
     try:
         body_battery = client.get_body_battery(fecha_str, fecha_str)
         if body_battery:
-            valores = [p[1] for p in body_battery[0].get("bodyBatteryValuesArray", []) if p[1] is not None]
+            # bodyBatteryValuesArray es una lista de [timestamp_ms, valor] a lo
+            # largo del día. Antes solo nos quedábamos con min/max/último; ahora
+            # guardamos también el primero (inicio del día) y la serie completa
+            # (hora local "HH:MM" + valor) para poder dibujar cómo ha variado a
+            # lo largo del día en vez de un solo punto por día.
+            puntos = [p for p in body_battery[0].get("bodyBatteryValuesArray", []) if p[1] is not None]
+            valores = [p[1] for p in puntos]
             snapshot["bateria_corporal"] = valores[-1] if valores else None
+            snapshot["bateria_corporal_inicio"] = valores[0] if valores else None
             snapshot["bateria_corporal_min"] = min(valores) if valores else None
             snapshot["bateria_corporal_max"] = max(valores) if valores else None
+            snapshot["bateria_corporal_serie"] = [
+                [datetime.utcfromtimestamp(p[0] / 1000).strftime("%H:%M"), p[1]] for p in puntos
+            ]
     except Exception as e:
         snapshot["bateria_corporal"] = None
         snapshot["_error_bateria"] = str(e)
@@ -119,6 +129,22 @@ def extraer_wellness(client: Garmin, fecha: date):
         snapshot["fc_reposo"] = stats.get("restingHeartRate")
     except Exception as e:
         snapshot["_error_stats"] = str(e)
+
+    # "Riesgo de lesión" y "descanso recomendado": Garmin no tiene un único
+    # endpoint con ese nombre exacto, pero training readiness / training
+    # status son lo más parecido (carga aguda:crónica, estado de forma,
+    # recomendación de descanso). Se guarda el JSON crudo tal cual, sin
+    # asumir qué campos exactos trae (varía por reloj/cuenta) — la webapp
+    # interpreta lo que encuentre y no rompe si algo falta.
+    try:
+        snapshot["training_readiness_raw"] = client.get_training_readiness(fecha_str)
+    except Exception as e:
+        snapshot["_error_training_readiness"] = str(e)
+
+    try:
+        snapshot["training_status_raw"] = client.get_training_status(fecha_str)
+    except Exception as e:
+        snapshot["_error_training_status"] = str(e)
 
     return snapshot
 
@@ -148,11 +174,15 @@ def extraer_actividades(client: Garmin, fecha: date):
             "distancia_km": round(act.get("distance", 0) / 1000, 2) if act.get("distance") else None,
             "fc_media": act.get("averageHR"),
             "calorias": act.get("calories"),
-            "raw_garmin": {
-                k: act.get(k) for k in
-                ("elevationGain", "vO2MaxValue", "aerobicTrainingEffect", "anaerobicTrainingEffect")
-                if k in act
-            },
+            # Antes solo guardábamos 4 campos concretos (elevación, VO2max,
+            # efecto aeróbico/anaeróbico) y se perdía todo lo demás que Garmin
+            # ya incluye gratis en este mismo endpoint: cadencia, potencia,
+            # zancada, tiempo de contacto con el suelo, tiempo de
+            # recuperación recomendado, carga de entrenamiento, tiempo en
+            # cada zona de FC, etc. Se guarda el dict completo tal cual —
+            # nada que perder, y la webapp decide qué mostrar de cada tipo
+            # de actividad.
+            "raw_garmin": act,
         }
 
         # Para entrenos de fuerza, Garmin guarda las series (ejercicio, repeticiones,
