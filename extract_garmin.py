@@ -113,6 +113,8 @@ def extraer_wellness(client: Garmin, fecha: date):
     try:
         stats = client.get_stats(fecha_str)
         snapshot["kcal_totales"] = stats.get("totalKilocalories")
+        snapshot["kcal_activas"] = stats.get("activeKilocalories")
+        snapshot["kcal_pasivas"] = stats.get("bmrKilocalories")
         snapshot["pasos"] = stats.get("totalSteps")
         snapshot["fc_reposo"] = stats.get("restingHeartRate")
     except Exception as e:
