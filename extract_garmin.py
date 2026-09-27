@@ -135,10 +135,12 @@ def extraer_actividades(client: Garmin, fecha: date):
     actividades = client.get_activities_by_date(fecha_str, fecha_str)
     resultado = []
     for act in actividades:
-        resultado.append({
-            "id": act.get("activityId"),
+        tipo = clasificar_tipo(act.get("activityType", {}).get("typeKey"))
+        activity_id = act.get("activityId")
+        entrada = {
+            "id": activity_id,
             "fecha": fecha_str,
-            "tipo": clasificar_tipo(act.get("activityType", {}).get("typeKey")),
+            "tipo": tipo,
             "tipo_garmin": act.get("activityType", {}).get("typeKey"),
             "duracion_min": round(act.get("duration", 0) / 60, 1) if act.get("duration") else None,
             "distancia_km": round(act.get("distance", 0) / 1000, 2) if act.get("distance") else None,
@@ -149,7 +151,18 @@ def extraer_actividades(client: Garmin, fecha: date):
                 ("elevationGain", "vO2MaxValue", "aerobicTrainingEffect", "anaerobicTrainingEffect")
                 if k in act
             },
-        })
+        }
+
+        # Para entrenos de fuerza, Garmin guarda las series (ejercicio, repeticiones,
+        # peso) en un endpoint aparte. Se guarda el JSON crudo tal cual (la webapp
+        # ya sabe interpretarlo) para no perder nada aunque el formato varíe.
+        if tipo == "fuerza" and activity_id:
+            try:
+                entrada["ejercicios_raw"] = client.get_activity_exercise_sets(activity_id)
+            except Exception as e:
+                entrada["_error_ejercicios"] = str(e)
+
+        resultado.append(entrada)
     return resultado
 
 
