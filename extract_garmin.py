@@ -164,21 +164,12 @@ def extraer_wellness(client: Garmin, fecha: date):
     except Exception as e:
         snapshot["_error_stats"] = str(e)
 
-    # "Riesgo de lesión" y "descanso recomendado": Garmin no tiene un único
-    # endpoint con ese nombre exacto, pero training readiness / training
-    # status son lo más parecido (carga aguda:crónica, estado de forma,
-    # recomendación de descanso). Se guarda el JSON crudo tal cual, sin
-    # asumir qué campos exactos trae (varía por reloj/cuenta) — la webapp
-    # interpreta lo que encuentre y no rompe si algo falta.
-    try:
-        snapshot["training_readiness_raw"] = client.get_training_readiness(fecha_str)
-    except Exception as e:
-        snapshot["_error_training_readiness"] = str(e)
-
-    try:
-        snapshot["training_status_raw"] = client.get_training_status(fecha_str)
-    except Exception as e:
-        snapshot["_error_training_status"] = str(e)
+    # NOTA: antes se guardaba aquí el "training readiness" / "training
+    # status" crudo de Garmin para el aviso de riesgo de lesión/descanso.
+    # Se ha quitado a propósito: ese cálculo lo hace ahora la webapp por su
+    # cuenta a partir de datos crudos (sueño, batería, FC reposo, carga de
+    # entreno) para no depender de la fórmula de una marca concreta — y de
+    # paso nos ahorramos dos llamadas más a la API de Garmin por día.
 
     return snapshot
 
