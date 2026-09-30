@@ -19,11 +19,27 @@ import base64
 import json
 import os
 from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import requests
 from garminconnect import Garmin
 
 GITHUB_API = "https://api.github.com"
+
+# Zona horaria del usuario (Canarias). Garmin nos da los timestamps de sueño
+# y de batería corporal en epoch-ms UTC ("GMT" en el nombre del campo); si se
+# formatean con datetime.utcfromtimestamp() el HH:MM que se guarda es la hora
+# UTC, no la local — en horario de verano (UTC+1) eso hace que "despertar"
+# salga una hora antes de la hora real a la que te levantas. Se convierte
+# explícitamente a esta zona antes de formatear como texto.
+ZONA_HORARIA = ZoneInfo("Atlantic/Canary")
+
+
+def _hora_local(epoch_ms):
+    """epoch-ms UTC -> 'HH:MM' en la zona horaria local (Canarias), o None."""
+    if epoch_ms is None:
+        return None
+    return datetime.fromtimestamp(epoch_ms / 1000, tz=ZONA_HORARIA).strftime("%H:%M")
 
 
 def env(name, default=None, required=False):
@@ -143,12 +159,10 @@ def extraer_wellness(client: Garmin, fecha: date):
             snapshot["bateria_corporal_inicio"] = valores[0] if valores else None
             snapshot["bateria_corporal_min"] = min(valores) if valores else None
             snapshot["bateria_corporal_max"] = max(valores) if valores else None
-            snapshot["bateria_corporal_serie"] = [
-                [datetime.utcfromtimestamp(p[0] / 1000).strftime("%H:%M"), p[1]] for p in puntos
-            ]
+            snapshot["bateria_corporal_serie"] = [[_hora_local(p[0]), p[1]] for p in puntos]
             snapshot["bateria_corporal_ventana"] = {
-                "despertar": datetime.utcfromtimestamp(despertar_ms / 1000).strftime("%H:%M") if despertar_ms else None,
-                "acostarse": datetime.utcfromtimestamp(acostarse_ms / 1000).strftime("%H:%M") if acostarse_ms else None,
+                "despertar": _hora_local(despertar_ms),
+                "acostarse": _hora_local(acostarse_ms),
             }
     except Exception as e:
         snapshot["bateria_corporal"] = None
